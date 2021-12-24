@@ -4,12 +4,30 @@ from scipy.special import binom
 import matplotlib.pyplot as plt
 from numpy.linalg import lstsq
 
+def read_seglid(file_name):
+    with open(file_name, 'r') as f:
+        lines = f.readlines()[1:]
+    # Skip header
+    xy = np.array([[float(i) for i in line.strip().split()] for line in lines]).T
+    # Find the turning point of x coordinate
+    i1 = np.where(np.diff(xy[0,:])>0.)[0][0]
+    # Determine axial chord and normalise
+    c = np.ptp(xy[0,:])
+    # Split into pressure and suction sides, normalise
+    xy1 = np.flip(xy[:,:i1],1)/c
+    xy2 = xy[:,i1:]/c
+    return xy1, xy2
+
 def bernstein( x, n, i ):
     return binom(n,i) * x**i *(1.-x)**(n-i)
 
 def z_to_shape_space( x, z, zte ):
     """Transform real coordinates to shape space."""
-    return (z - x*zte) / np.sqrt(x) / (1. - x)
+    # Catch divide by zero at edges
+    eps = 1e-6
+    x[x<=eps] = eps
+    x[x>=(1.-eps)] = (1.-eps)
+    return (z - x*zte) / ( np.sqrt(x) * (1. - x) )
 
 def z_from_shape_space( x, s, zte ):
     """Transform shape space to real coordinates."""
@@ -21,8 +39,10 @@ def evaluate_coeffs( x, A ):
 
 def fit_coeffs( x, s, order ):
     n = order - 1
-    X = np.stack( [ bernstein( x, n, i ) for i in range(0,n+1) ] ).T
-    return lstsq(X, s, rcond=None)[:2]
+    xtrim = x[np.abs(x-0.5)<0.49]
+    strim = s[np.abs(x-0.5)<0.49]
+    X = np.stack( [ bernstein( xtrim, n, i ) for i in range(0,n+1) ] ).T
+    return lstsq(X, strim, rcond=None)[:2]
 
 def resample_coeffs( A, order ):
     x = np.linspace(0.,1.)
@@ -31,13 +51,37 @@ def resample_coeffs( A, order ):
 
 
 if __name__=="__main__":
-    x = np.linspace(0,1.)
-    s = - (x**3 - x**2. + .2*x)
-    A1, _ = fit_coeffs( x, s, 4 )
-    A2, _ = resample_coeffs( A1, 3 )
-    A3, _ = resample_coeffs( A1, 10 )
-    y = evaluate_coeffs( x, A3 )
+
+
+    xy = read_seglid( 'naca6412.dat' )
+
+    zte = 0.
+    order = 4
+
+    s = [z_to_shape_space(*xyi, zte) for xyi in xy]
+
+    # print(fit_coeffs(xy[0][0,:], s[0], order))
+
+
+    A, res = zip(*[fit_coeffs( xyi[0,:], si, order ) for xyi, si in zip(xy, s) ])
+
+
+    sfit = [evaluate_coeffs( xyi[0,:], Ai ) for xyi, Ai in zip(xy, A)]
+
+    yfit = [ z_from_shape_space( xyi[0,:] , sfiti, zte) for xyi, sfiti in zip(xy, sfit)]
+
+    # x = np.linspace(0,1.)
+    # s = - (x**3 - x**2. + .2*x)
+    # A1, _ = fit_coeffs( x, s, 4 )
+    # A2, _ = resample_coeffs( A1, 3 )
+    # A3, _ = resample_coeffs( A1, 10 )
+
     f, a = plt.subplots()
-    a.plot(x,s,'-')
-    a.plot(x,y,'o')
+    for xyi, si, sfiti, yfiti in zip(xy, s, sfit, yfit):
+        # a.plot(xyi[0,:],si,'-')
+        # a.plot(xyi[0,:],sfiti,'--')
+        a.plot(*xyi,'kx')
+        a.plot(xyi[0,:], yfiti, 'k-')
+    # a.plot(*xy2,'kx')
+    a.axis('equal')
     plt.show()
