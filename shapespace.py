@@ -4,6 +4,8 @@ from scipy.special import binom
 import matplotlib.pyplot as plt
 from numpy.linalg import lstsq
 
+dx = 0.04
+
 def read_seglid(file_name):
     with open(file_name, 'r') as f:
         lines = f.readlines()[1:]
@@ -23,11 +25,12 @@ def bernstein( x, n, i ):
 
 def z_to_shape_space( x, z, zte ):
     """Transform real coordinates to shape space."""
-    # Catch divide by zero at edges
-    eps = 1e-6
-    x[x<=eps] = eps
-    x[x>=(1.-eps)] = (1.-eps)
-    return (z - x*zte) / ( np.sqrt(x) * (1. - x) )
+    dz_dx = np.gradient(z, x)
+    # Preallocate
+    s = np.ones(x.shape) * np.nan
+    ii = np.abs(x-0.5)<(0.5-dx)
+    s[ii] = (z[ii] - x[ii]*zte) / ( np.sqrt(x[ii]) * (1. - x[ii]) )
+    return s
 
 def z_from_shape_space( x, s, zte ):
     """Transform shape space to real coordinates."""
@@ -39,8 +42,8 @@ def evaluate_coeffs( x, A ):
 
 def fit_coeffs( x, s, order ):
     n = order - 1
-    xtrim = x[np.abs(x-0.5)<0.49]
-    strim = s[np.abs(x-0.5)<0.49]
+    xtrim = x[np.abs(x-0.5)<(0.5-dx)]
+    strim = s[np.abs(x-0.5)<(0.5-dx)]
     X = np.stack( [ bernstein( xtrim, n, i ) for i in range(0,n+1) ] ).T
     return lstsq(X, strim, rcond=None)[:2]
 
@@ -66,9 +69,10 @@ if __name__=="__main__":
     A, res = zip(*[fit_coeffs( xyi[0,:], si, order ) for xyi, si in zip(xy, s) ])
 
 
-    sfit = [evaluate_coeffs( xyi[0,:], Ai ) for xyi, Ai in zip(xy, A)]
+    xfit =  np.linspace(0.,1.,1000)
+    sfit = [evaluate_coeffs( xfit, Ai ) for Ai in A]
 
-    yfit = [ z_from_shape_space( xyi[0,:] , sfiti, zte) for xyi, sfiti in zip(xy, sfit)]
+    yfit = [ z_from_shape_space( xfit, sfiti, zte) for sfiti in sfit]
 
     # x = np.linspace(0,1.)
     # s = - (x**3 - x**2. + .2*x)
@@ -77,11 +81,13 @@ if __name__=="__main__":
     # A3, _ = resample_coeffs( A1, 10 )
 
     f, a = plt.subplots()
+    f2, a2 = plt.subplots()
     for xyi, si, sfiti, yfiti in zip(xy, s, sfit, yfit):
-        # a.plot(xyi[0,:],si,'-')
-        # a.plot(xyi[0,:],sfiti,'--')
+        a2.plot(xyi[0,:],si,'-')
+        a2.plot(xfit,sfiti,'--')
         a.plot(*xyi,'kx')
-        a.plot(xyi[0,:], yfiti, 'k-')
+        a.plot( xfit, yfiti, 'k-')
     # a.plot(*xy2,'kx')
     a.axis('equal')
+    a2.axis('equal')
     plt.show()
