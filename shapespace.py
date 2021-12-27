@@ -132,7 +132,7 @@ def fit_surface(xy, chi, zte, order, A0=None):
     return fit_coefficients(xc, s, order, dx=0.02, A0=A0)
 
 
-def evaluate_surface(A, x, chi, zte ):
+def evaluate_surface(A, x, chi, zte):
     """Given a set of coefficients, return coordinates."""
     s = evaluate_coefficients(x, A)
     t = from_shape_space(x, s, zte)
@@ -153,6 +153,7 @@ def fit_camber(xy, zte, order, chi0):
         _, resid = fit_aerofoil(xy, x, zte, order)
         resid = np.mean(resid)
         return resid
+
     return fmin(iterate, chi0)
 
 
@@ -175,7 +176,7 @@ if __name__ == "__main__":
     a.axis("equal")
     a.plot(xfit, evaluate_camber(xfit, chi), "k--")
     for i in range(len(xy)):
-        xufit, yufit = evaluate_surface(A[i]*(1-2*i), xfit, chi, zte)
+        xufit, yufit = evaluate_surface(A[i] * (1 - 2 * i), xfit, chi, zte)
         a.plot(*xy[i], "x")
         a.plot(xufit, yufit, "-", color="C%d" % i)
     plt.show()
