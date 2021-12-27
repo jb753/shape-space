@@ -3,7 +3,7 @@ import numpy as np
 from scipy.special import binom
 import matplotlib.pyplot as plt
 from numpy.linalg import lstsq
-from scipy.optimize import newton
+from scipy.optimize import newton, fmin
 
 def read_seglid(file_name):
     with open(file_name, 'r') as f:
@@ -26,7 +26,7 @@ def read_seglid(file_name):
 def bernstein( x, n, i ):
     return binom(n,i) * x**i *(1.-x)**(n-i)
 
-def z_to_shape_space( x, z, zte ):
+def to_shape_space( x, z, zte ):
     """Transform real coordinates to shape space."""
     # Preallocate
     s = np.ones(x.shape) * np.nan
@@ -36,7 +36,7 @@ def z_to_shape_space( x, z, zte ):
     s[ii] = (z[ii] - x[ii]*zte) / ( np.sqrt(x[ii]) * (1. - x[ii]) )
     return s
 
-def z_from_shape_space( x, s, zte ):
+def from_shape_space( x, s, zte ):
     """Transform shape space to real coordinates."""
     return np.sqrt(x) * (1. - x) * s + x*zte
 
@@ -44,7 +44,7 @@ def evaluate_coeffs( x, A ):
     n = len(A)-1
     return np.sum(np.stack([A[i] * bernstein( x, n , i ) for i in range(0,n+1)]),0)
 
-def fit_coeffs( x, s, order, dx=0., Rle=None ):
+def fit_coeffs( x, s, order, dx=0., A0=None ):
     n = order - 1
     itrim = np.abs(x-0.5)<(0.5-dx)
     xtrim = x[itrim]
@@ -52,25 +52,13 @@ def fit_coeffs( x, s, order, dx=0., Rle=None ):
 
     X = np.stack( [ bernstein( xtrim, n, i ) for i in range(0,n+1) ] ).T
 
-    if Rle:
+    if A0:
         X = X[:,1:]
-        A0 = np.sign(Rle)*np.sqrt(2.*np.abs(Rle))
         A, resid = lstsq(X, strim - A0*bernstein( xtrim, n, 0), rcond=None)[:2]
         A = np.insert(A, 0, A0)
         return A, resid
     else:
         return lstsq(X, strim, rcond=None)[:2]
-
-# def fit_section( xy, order, zte, dx=0. ):
-#     # Initially fit with free leading edge radii
-#     s = [z_to_shape_space(*xyi, zte) for xyi in xy]
-#     A, _ = zip(*[fit_coeffs( xyi[0,:], si, order, dx ) for xyi, si in zip(xy, s) ])
-#     A0 = np.array([np.abs(Ai[0]) for Ai in A])
-#     Rle = 0.5*A0**2.
-#     guess_Rle = np.mean(Rle)
-#     err_Rle = np.ptp(Rle)/guess_Rle
-#     A = [fit_coeffs( xyi[0,:], si, order, dx, guess_Rle*np.sign(xyi[1,2]) )[0] for xyi, si in zip(xy, s) ]
-#     return A
 
 def resample_coeffs( A, order ):
     x = np.linspace(0.,1.)
@@ -95,7 +83,49 @@ def coord_to_thickness( xy, chi ):
         return yu - eval_camber( x, chi ) + (xu - x)/eval_camber_slope(x, chi)
     xc = newton( iterate, xu )
     yc = eval_camber( xc, chi )
-    return xc, yc
+    # Now evaluate thickness
+    t = np.sqrt(np.sum(np.stack((xu-xc, yu-yc))**2.,0))
+    return xc, yc, t
+
+def thickness_to_coord( xc, t, chi ):
+    theta = np.arctan(eval_camber_slope(xc,chi))
+    yc = eval_camber( xc, chi )
+    xu = xc - t*np.sin(theta)
+    yu = yc + t*np.cos(theta)
+    return xu, yu
+
+def fit_surface( xy, chi, zte, order, A0=None ):
+    """Fit coefficients for perpendicular thickness in shape space."""
+    # Convert to perpendicular thickness
+    xc, yc, t = coord_to_thickness( xy, chi )
+    # Transform thickness to shape-space
+    s = to_shape_space( xc, t, zte )
+    # Fit in shape space
+    return fit_coeffs( xc, s, order, dx=0.02, A0=A0 )
+
+def evaluate_surface( A, x, chi, zte, flip=False ):
+    """Given a set of coefficients, return tangential thickness."""
+    s = evaluate_coeffs(x, A)
+    t = from_shape_space(x, s, zte)
+    if flip:
+        t *= -1.
+    return thickness_to_coord( x, t, chi )
+
+def fit_both( xy, chi, zte, order ):
+    # First pass, both surfaces with free LE radius
+    A = [fit_surface( xyi, chi, zte, order )[0] for xyi in xy]
+    # Now fit again with mean A0
+    A0 = np.mean([Ai[0] for Ai in A])
+    return zip(*[
+        fit_surface( xyi, chi, zte, order, A0 ) for xyi in xy
+        ])
+
+def fit_camber( xy, zte, order, chi0 ):
+    def iterate( x):
+        _, resid = fit_both(xy, x, zte, order)
+        resid = np.mean(resid)
+        return resid
+    return fmin(iterate, chi0)
 
 
 if __name__=="__main__":
@@ -106,31 +136,19 @@ if __name__=="__main__":
     zte = 0.00
     order = 4
     dx = 0.05
-    chi = (15.,-15.)
-
-    xc1, yc1 = coord_to_thickness( xy[0], chi)
-
-    # s = [z_to_shape_space(*xyi, zte) for xyi in xy]
-    # A, resid = zip(*[fit_coeffs( xyi[0,:], si, order, dx ) for xyi, si in zip(xy, s) ])
+    chi_guess = (15.,-15.)
     xfit =  np.linspace(0.,1.,10000)
-    # sfit = [evaluate_coeffs( xfit, Ai ) for Ai in A]
-    # yfit = [ z_from_shape_space( xfit, sfiti, zte) for sfiti in sfit]
 
-    # x = np.linspace(0,1.)
-    # s = - (x**3 - x**2. + .2*x)
-    # A1, _ = fit_coeffs( x, s, 4 )
-    # A2, _ = resample_coeffs( A1, 3 )
-    # A3, _ = resample_coeffs( A1, 10 )
+    chi = fit_camber( xy, zte, order, chi_guess )
+    print(chi)
+
+    A, resid = fit_both( xy, chi, zte, order )
 
     f, a = plt.subplots()
-    # f2, a2 = plt.subplots()
-    for xyi in xy:
-        # a2.plot(xyi[0,:],si,'-')
-        # a2.plot(xfit,sfiti,'--')
-        a.plot(*xyi,'x')
-    a.plot( xfit, eval_camber(xfit, chi), 'k--')
-    a.plot( xc1, yc1, 'o')
-    # a.plot(*xy2,'kx')
     a.axis('equal')
-    # a2.axis('equal')
+    a.plot( xfit, eval_camber(xfit, chi), 'k--')
+    for i in range(len(xy)):
+        xufit, yufit  = evaluate_surface(A[i], xfit, chi, zte, flip=i)
+        a.plot(*xy[i],'x')
+        a.plot( xufit, yufit, '-', color='C%d'%i)
     plt.show()
