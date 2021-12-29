@@ -70,7 +70,8 @@ def fit_coefficients(x, s, order, dx=0.05):
     # All coefficients free - normal fit
     return lstsq(X, strim, rcond=None)[:2]
 
-def fit_both(xy, chi, zte, order):
+
+def fit_aerofoil(xy, chi, zte, order):
     """Fit Bernstein polynomial coefficients for both aerofoils surfaces."""
     n = order - 1
     dx = 0.02
@@ -92,12 +93,15 @@ def fit_both(xy, chi, zte, order):
 
     strim = np.concatenate(strim_all)
     X_le = np.concatenate(X_le_all)
-    X = np.block([[X_all[0],np.zeros(X_all[1].shape)],[np.zeros(X_all[0].shape),X_all[1]]])
+    X = np.block(
+        [[X_all[0], np.zeros(X_all[1].shape)], [np.zeros(X_all[0].shape), X_all[1]]]
+    )
     X = np.insert(X, 0, X_le, 1)
     A_all, resid = lstsq(X, strim, rcond=None)[:2]
     Au = A_all[:order]
-    Al = np.insert(A_all[order:],0, A_all[0])
+    Al = np.insert(A_all[order:], 0, A_all[0])
     return (Au, Al), resid
+
 
 def resample_coefficients(A, order):
     """Up- or down-sample a set of coefficients to a new order."""
@@ -125,6 +129,7 @@ def coord_to_thickness(xy, chi):
     # Find intersections of xu, yu with camber line perpendicular
     def iterate(x):
         return yu - evaluate_camber(x, chi) + (xu - x) / evaluate_camber_slope(x, chi)
+
     xc = newton(iterate, xu)
     yc = evaluate_camber(xc, chi)
     # Now evaluate thickness
@@ -157,16 +162,9 @@ def evaluate_surface(A, x, chi, zte):
     return thickness_to_coord(x, t, chi)
 
 
-def fit_aerofoil(xy, chi, zte, order):
-    """Fit two sets of coefficients for pressure/suction sides of aerofoil."""
-    # First pass, both surfaces with free LE radius
-    A = [fit_surface(xyi, chi, zte, order)[0] for xyi in xy]
-    # Now fit again with the mean A0
-    A0 = np.mean([Ai[0] for Ai in A])
-    return zip(*[fit_surface(xyi, chi, zte, order, A0) for xyi in xy])
-
-
 def fit_camber(xy, zte, order, chi0):
+    """Choose optimum camber angles."""
+
     def iterate(x):
         _, resid = fit_aerofoil(xy, x, zte, order)
         resid = np.mean(resid)
@@ -180,63 +178,54 @@ if __name__ == "__main__":
     # Read some input data
     xy = read_seglid("naca6412.dat")
 
-    print(xy[0].size)
-    print(xy[1].size)
-    quit()
-
     # Camber line
     chi = (15.0, -15.0)
-    xfit = np.linspace(0.,1.)
+    xfit = np.linspace(0.0, 1.0)
 
-    # # Thickness plot
-    # f, a = plt.subplots()
-    # a.axis("equal")
-    # # a.axis("off")
-    # a.grid(False)
-    # # Camber line
-    # a.plot(xfit, evaluate_camber(xfit, chi),'k--')
-    # for i in range(len(xy)):
-    #     # Base coordinates
-    #     a.plot(*xy[i], "x")
-    #     # Thickness vectors
-    #     xc, yc, t = coord_to_thickness(xy[i], chi)
-    #     dx = np.stack((xc,xy[i][0,:]))
-    #     dy = np.stack((yc,xy[i][1,:]))
-    #     a.plot(dx, dy, color='C%d'%i)
-    # a.set_xlabel('Axial Coordinate')
-    # a.set_ylabel('Tangential Coordinate')
-    # plt.tight_layout()
-    # plt.savefig("thickness.svg")
-    # quit()
+    # Thickness plot
+    f, a = plt.subplots()
+    a.axis("equal")
+    # a.axis("off")
+    a.grid(False)
+    # Camber line
+    a.plot(xfit, evaluate_camber(xfit, chi), "k--")
+    for i in range(len(xy)):
+        # Base coordinates
+        a.plot(*xy[i], "x")
+        # Thickness vectors
+        xc, yc, t = coord_to_thickness(xy[i], chi)
+        dx = np.stack((xc, xy[i][0, :]))
+        dy = np.stack((yc, xy[i][1, :]))
+        a.plot(dx, dy, color="C%d" % i)
+    a.set_xlabel("Axial Coordinate")
+    a.set_ylabel("Tangential Coordinate")
+    plt.tight_layout()
+    plt.savefig("thickness.svg")
 
     # Thickness/shape space plot
     zte = 0.001
     order = 4
     dx = 0.05
 
-    # xc, yc, t = coord_to_thickness(xy[0], chi)
-    # f, a = plt.subplots()
-    # s = to_shape_space( xc, t, zte)
-    # A, _ = fit_coefficients( xc, s, order )
-    # tfit = evaluate_coefficients( xfit, A)
-    # a.plot(xc, t,label='$t(x)$')
-    # a.plot(xc, s,label='$s(x)$')
-    # a.plot(xfit, tfit, '--', label='Fit $n=3$')
-    # a.set_ylim([0.,0.2])
-    # a.set_xlabel('Axial Coordinate')
-    # a.set_ylabel('Thickness')
-    # a.legend()
-    # plt.tight_layout()
-    # plt.savefig("shape-space.svg")
-    # # plt.show()
-    # quit()
+    xc, yc, t = coord_to_thickness(xy[0], chi)
+    f, a = plt.subplots()
+    s = to_shape_space(xc, t, zte)
+    A, _ = fit_coefficients(xc, s, order)
+    tfit = evaluate_coefficients(xfit, A)
+    a.plot(xc, t, label="$t(x)$")
+    a.plot(xc, s, label="$s(x)$")
+    a.plot(xfit, tfit, "--", label="Fit $n=3$")
+    a.set_ylim([0.0, 0.2])
+    a.set_xlabel("Axial Coordinate")
+    a.set_ylabel("Thickness")
+    a.legend()
+    plt.tight_layout()
+    plt.savefig("shape-space.svg")
 
-    xfit = np.linspace(0.0, 1.0, 10000)
+    # Do the fitting
+    A, resid = fit_aerofoil(xy, chi, zte, order)
 
-
-    # A, resid = fit_aerofoil(xy, chi, zte, order)
-    A, residul = fit_both(xy, chi, zte, order)
-
+    # Plot fit
     f, a = plt.subplots()
     a.axis("equal")
     a.plot(xfit, evaluate_camber(xfit, chi), "k--")
@@ -244,8 +233,9 @@ if __name__ == "__main__":
         xufit, yufit = evaluate_surface(A[i] * (1 - 2 * i), xfit, chi, zte)
         a.plot(*xy[i], "x")
         a.plot(xufit, yufit, "-", color="C%d" % i)
-    a.set_xlabel('Axial Coordinate')
-    a.set_ylabel('Tangential Coordinate')
+    a.set_xlabel("Axial Coordinate")
+    a.set_ylabel("Tangential Coordinate")
     plt.tight_layout()
     plt.savefig("fitted.svg")
+
     plt.show()
