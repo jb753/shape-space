@@ -54,7 +54,7 @@ def evaluate_coefficients(x, A):
     )
 
 
-def fit_coefficients(x, s, order, dx=0.0, A0=None):
+def fit_coefficients(x, s, order, dx=0.05):
     """Fit shape-space distribution with Bernstein polynomial coefficients.
 
     Return both a vector of coefficients, length `order`, and sum residual."""
@@ -67,17 +67,37 @@ def fit_coefficients(x, s, order, dx=0.0, A0=None):
     strim = s[itrim]
     # Evaluate all polynomials
     X = np.stack([bernstein(xtrim, n, i) for i in range(0, n + 1)]).T
-    if A0:
-        # If the first coefficient (LE radius) is specified, do not fit the
-        # first coefficient and subtract first term from shape space
-        X = X[:, 1:]
-        A, resid = lstsq(X, strim - A0 * bernstein(xtrim, n, 0), rcond=None)[:2]
-        A = np.insert(A, 0, A0)
-        return A, resid
-    else:
-        # All coefficients free - normal fit
-        return lstsq(X, strim, rcond=None)[:2]
+    # All coefficients free - normal fit
+    return lstsq(X, strim, rcond=None)[:2]
 
+def fit_both(xy, chi, zte, order):
+    """Fit Bernstein polynomial coefficients for both aerofoils surfaces."""
+    n = order - 1
+    dx = 0.02
+    # When converting from real coordinates to shape space, we end up with
+    # singularities and numerical instability at leading and trailing edges.
+    # So in these cases, ignore within dx at LE and TE
+    xtrim_all = []
+    strim_all = []
+    X_all = []
+    X_le_all = []
+    for xyi in xy:
+        xc, yc, t = coord_to_thickness(xyi, chi)
+        s = to_shape_space(xc, t, zte)
+        itrim = np.abs(xc - 0.5) < (0.5 - dx)
+        xtrim_all.append(xc[itrim])
+        strim_all.append(s[itrim])
+        X_all.append(np.stack([bernstein(xc[itrim], n, i) for i in range(1, n + 1)]).T)
+        X_le_all.append(bernstein(xc[itrim], n, 0))
+
+    strim = np.concatenate(strim_all)
+    X_le = np.concatenate(X_le_all)
+    X = np.block([[X_all[0],np.zeros(X_all[1].shape)],[np.zeros(X_all[0].shape),X_all[1]]])
+    X = np.insert(X, 0, X_le, 1)
+    A_all, resid = lstsq(X, strim, rcond=None)[:2]
+    Au = A_all[:order]
+    Al = np.insert(A_all[order:],0, A_all[0])
+    return (Au, Al), resid
 
 def resample_coefficients(A, order):
     """Up- or down-sample a set of coefficients to a new order."""
@@ -101,12 +121,10 @@ def evaluate_camber_slope(x, chi):
 def coord_to_thickness(xy, chi):
     """Perpendicular thickness distribution given camber line angles."""
     xu, yu = xy
-    dyu_dx = np.gradient(yu, xu)
     tanchi = np.tan(np.radians(chi))
     # Find intersections of xu, yu with camber line perpendicular
     def iterate(x):
         return yu - evaluate_camber(x, chi) + (xu - x) / evaluate_camber_slope(x, chi)
-
     xc = newton(iterate, xu)
     yc = evaluate_camber(xc, chi)
     # Now evaluate thickness
@@ -159,18 +177,65 @@ def fit_camber(xy, zte, order, chi0):
 
 if __name__ == "__main__":
 
+    # Read some input data
     xy = read_seglid("naca6412.dat")
 
-    zte = 0.00
+    print(xy[0].size)
+    print(xy[1].size)
+    quit()
+
+    # Camber line
+    chi = (15.0, -15.0)
+    xfit = np.linspace(0.,1.)
+
+    # # Thickness plot
+    # f, a = plt.subplots()
+    # a.axis("equal")
+    # # a.axis("off")
+    # a.grid(False)
+    # # Camber line
+    # a.plot(xfit, evaluate_camber(xfit, chi),'k--')
+    # for i in range(len(xy)):
+    #     # Base coordinates
+    #     a.plot(*xy[i], "x")
+    #     # Thickness vectors
+    #     xc, yc, t = coord_to_thickness(xy[i], chi)
+    #     dx = np.stack((xc,xy[i][0,:]))
+    #     dy = np.stack((yc,xy[i][1,:]))
+    #     a.plot(dx, dy, color='C%d'%i)
+    # a.set_xlabel('Axial Coordinate')
+    # a.set_ylabel('Tangential Coordinate')
+    # plt.tight_layout()
+    # plt.savefig("thickness.svg")
+    # quit()
+
+    # Thickness/shape space plot
+    zte = 0.001
     order = 4
     dx = 0.05
-    chi_guess = (15.0, -15.0)
+
+    # xc, yc, t = coord_to_thickness(xy[0], chi)
+    # f, a = plt.subplots()
+    # s = to_shape_space( xc, t, zte)
+    # A, _ = fit_coefficients( xc, s, order )
+    # tfit = evaluate_coefficients( xfit, A)
+    # a.plot(xc, t,label='$t(x)$')
+    # a.plot(xc, s,label='$s(x)$')
+    # a.plot(xfit, tfit, '--', label='Fit $n=3$')
+    # a.set_ylim([0.,0.2])
+    # a.set_xlabel('Axial Coordinate')
+    # a.set_ylabel('Thickness')
+    # a.legend()
+    # plt.tight_layout()
+    # plt.savefig("shape-space.svg")
+    # # plt.show()
+    # quit()
+
     xfit = np.linspace(0.0, 1.0, 10000)
 
-    chi = fit_camber(xy, zte, order, chi_guess)
-    print(chi)
 
-    A, resid = fit_aerofoil(xy, chi, zte, order)
+    # A, resid = fit_aerofoil(xy, chi, zte, order)
+    A, residul = fit_both(xy, chi, zte, order)
 
     f, a = plt.subplots()
     a.axis("equal")
@@ -179,4 +244,8 @@ if __name__ == "__main__":
         xufit, yufit = evaluate_surface(A[i] * (1 - 2 * i), xfit, chi, zte)
         a.plot(*xy[i], "x")
         a.plot(xufit, yufit, "-", color="C%d" % i)
+    a.set_xlabel('Axial Coordinate')
+    a.set_ylabel('Tangential Coordinate')
+    plt.tight_layout()
+    plt.savefig("fitted.svg")
     plt.show()
